@@ -234,3 +234,63 @@
     (asserts! (is-eq tx-sender contract-owner) error-unauthorized)
     (var-set max-liquidity-per-market max-amount)
     (ok true)))
+
+
+(define-public (withdraw-oracle-stake (amount uint))
+  (let ((oracle (unwrap! (map-get? oracles tx-sender) error-not-oracle))
+        (current-stake (get stake oracle))
+        (remaining-stake (- current-stake amount)))
+    
+    ;; Ensure minimum stake remains
+    (asserts! (>= remaining-stake min-stake) error-invalid-amount)
+    
+    ;; Transfer stake back to oracle
+    (as-contract (try! (stx-transfer? amount tx-sender tx-sender)))
+    
+    ;; Update oracle stake
+    (map-set oracles tx-sender
+      (merge oracle { stake: remaining-stake }))
+    
+    (ok true)))
+
+(define-map market-oracles
+  { market-id: uint, oracle: principal }
+  { added-by: principal, weight: uint })
+
+(define-map liquidity-providers
+  { market-id: uint, provider: principal, outcome: (string-ascii 50) }
+  { amount: uint, block-added: uint })
+
+(define-map user-activity
+  principal
+  {
+    markets-participated: uint,
+    total-volume: uint,
+    last-activity-block: uint,
+    positions-count: uint,
+    wins: uint,
+    losses: uint
+  })
+
+(define-private (update-user-activity (user principal) (amount uint))
+  (let ((activity (default-to {
+                    markets-participated: u0,
+                    total-volume: u0,
+                    last-activity-block: stacks-block-height,
+                    positions-count: u0,
+                    wins: u0,
+                    losses: u0
+                  } (map-get? user-activity user))))
+    (map-set user-activity user
+      (merge activity {
+        total-volume: (+ (get total-volume activity) amount),
+        last-activity-block: stacks-block-height
+      }))))
+
+(define-map featured-markets
+  uint
+  { featured-until: uint, promoted-by: principal })
+
+(define-map market-whitelist
+  { market-id: uint, user: principal }
+  { allowed: bool })
