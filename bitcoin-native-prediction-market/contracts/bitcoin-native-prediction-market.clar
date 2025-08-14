@@ -294,3 +294,210 @@
 (define-map market-whitelist
   { market-id: uint, user: principal }
   { allowed: bool })
+(define-data-var total-markets-created uint u0)
+(define-data-var total-volume uint u0)
+(define-data-var total-fees-collected uint u0)
+
+(define-constant error-pool-liquidity (err u16))
+(define-constant error-max-liquidity (err u17))
+(define-constant error-paused (err u18))
+(define-constant error-invalid-withdrawal (err u19))
+(define-constant error-liquidity-locked (err u20))
+(define-constant error-threshold-not-met (err u21))
+(define-constant error-invalid-oracle (err u22))
+(define-constant error-invalid-fee (err u23))
+(define-constant error-invalid-category (err u24))
+
+;; Example from add-market-liquidity
+(asserts! (not (var-get protocol-paused)) error-paused)
+
+;; Define market categories
+(define-map market-categories
+  uint
+  {
+    category: (string-ascii 20),
+    subcategory: (optional (string-ascii 30))
+  })
+
+;; Mapping of categories to market-ids
+(define-map category-markets
+  (string-ascii 20)
+  (list 100 uint))
+
+;; Get markets by category
+(define-read-only (get-markets-by-category (category (string-ascii 20)))
+  (default-to (list) (map-get? category-markets category)))
+
+;; Check if category is valid
+(define-read-only (is-valid-category (category (string-ascii 20)))
+  (or 
+    (is-eq category "sports")
+    (is-eq category "crypto")
+    (is-eq category "politics")
+    (is-eq category "finance")
+    (is-eq category "entertainment")
+    (is-eq category "science")
+    (is-eq category "other")))
+
+;; Get market category
+(define-read-only (get-market-category (market-id uint))
+  (map-get? market-categories market-id))
+
+;; Helper to check if sender is market creator or contract owner
+(define-private (is-market-creator-or-owner (market-id uint))
+  (let ((market (map-get? markets market-id)))
+    (match market
+      market-data (or (is-eq tx-sender (get creator market-data))
+                      (is-eq tx-sender contract-owner))
+      false)))
+
+;; Market tags
+(define-map market-tags
+  uint
+  (list 5 (string-ascii 20)))
+
+;; Set market tags
+(define-public (set-market-tags (market-id uint) (tags (list 5 (string-ascii 20))))
+  (begin
+    (asserts! (is-market-creator-or-owner market-id) error-unauthorized)
+    (map-set market-tags market-id tags)
+    (ok true)))
+
+;; Get market tags
+(define-read-only (get-market-tags (market-id uint))
+  (default-to (list) (map-get? market-tags market-id)))
+
+;; Parent-child market relationship
+(define-map conditional-markets
+  uint  ;; child market-id
+  {
+    parent-market-id: uint,
+    parent-outcome: (string-ascii 50),
+    resolution-logic: (buff 1)  ;; 0x01: auto-resolve, 0x02: oracle resolves
+  })
+
+;; Check conditional market
+(define-read-only (get-conditional-market-parent (market-id uint))
+  (map-get? conditional-markets market-id))
+
+;; Check if market is conditional
+(define-read-only (is-conditional-market (market-id uint))
+  (is-some (map-get? conditional-markets market-id)))
+
+;; Notification types
+(define-constant notification-market-resolved 0x01)
+(define-constant notification-dispute-started 0x02)
+(define-constant notification-position-profitable 0x03)
+(define-constant notification-liquidity-update 0x04)
+(define-constant notification-oracle-vote 0x05)
+
+;; Notification storage
+(define-map user-notifications
+  { user: principal, notification-id: uint }
+  {
+    market-id: uint,
+    notification-type: (buff 1),
+    message: (string-utf8 200),
+    created-at: uint,
+    read: bool
+  })
+(define-data-var notification-id-nonce uint u0)
+
+;; Create notification (private helper)
+(define-private (create-notification 
+  (user principal) 
+  (market-id uint) 
+  (notification-type (buff 1))
+  (message (string-utf8 200)))
+  
+  (let ((notification-id (var-get notification-id-nonce)))
+    ;; Store notification
+    (map-set user-notifications
+      { user: user, notification-id: notification-id }
+      {
+        market-id: market-id,
+        notification-type: notification-type,
+        message: message,
+        created-at: stacks-block-height,
+        read: false
+      })
+    
+    ;; Increment nonce
+    (var-set notification-id-nonce (+ notification-id u1))
+    
+    notification-id))
+
+;; Get user notifications
+(define-read-only (get-user-notifications (user principal) (limit uint) (offset uint))
+  ;; This would need a more complex implementation to be efficient
+  ;; For now returning a placeholder
+  (ok (list)))
+
+;; Mark notification as read
+(define-public (mark-notification-read (notification-id uint))
+  (let ((notification (unwrap! (map-get? user-notifications { user: tx-sender, notification-id: notification-id }) error-invalid-params)))
+    (map-set user-notifications
+      { user: tx-sender, notification-id: notification-id }
+      (merge notification { read: true }))
+    (ok true)))
+
+    ;; Market templates storage
+(define-map market-templates 
+  uint 
+  {
+    title: (string-ascii 100),
+    description: (string-utf8 500),
+    outcome-type: (buff 1),
+    possible-outcomes: (list 10 (string-ascii 50)),
+    duration-blocks: uint,
+    oracle-fee: uint,
+    market-fee: uint,
+    category: (string-ascii 20),
+    tags: (list 5 (string-ascii 20)),
+    outcome-values: (optional (list 10 uint)),
+    creator: principal
+  })
+
+;; Get market template
+(define-read-only (get-market-template (template-id uint))
+  (map-get? market-templates template-id))
+
+;; Create market from template
+(define-public (create-market-from-template 
+  (template-id uint) 
+  (oracle-address principal)
+  (metadata (optional (string-utf8 500))))
+  
+  (let ((template (unwrap! (map-get? market-templates template-id) error-invalid-params))
+        (resolution-block (+ stacks-block-height (get duration-blocks template))))
+    
+    ;; [Call to create-market function would go here with template values]
+    ;; Return the new market ID
+    (ok (var-get market-id-nonce))))
+
+    ;; Referral tracking
+(define-map referrals
+  { referred-user: principal }
+  { referrer: principal, active-until: uint, fee-share-percentage: uint })
+
+;; Referrer earnings
+(define-map referrer-earnings
+  principal
+  { total-earnings: uint, withdrawn-earnings: uint })
+
+;; Set referral
+(define-public (set-referral (referrer principal))
+  (begin
+    ;; Cannot refer yourself
+    (asserts! (not (is-eq tx-sender referrer)) error-invalid-params)
+    
+    ;; Set referral with 90-day expiration (approximately)
+    (map-set referrals 
+      { referred-user: tx-sender }
+      { 
+        referrer: referrer, 
+        active-until: (+ stacks-block-height u12960), ;; ~90 days in Bitcoin blocks
+        fee-share-percentage: u50 ;; 50% share of fees
+      })
+    
+    (ok true)))
